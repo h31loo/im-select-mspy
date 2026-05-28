@@ -15,7 +15,8 @@ im-select-mspy 是一个针对微软拼音输入法的输入法切换工具, 它
 目前的配置如下
 
 - `-t=任务栏` 程序通过该参数来寻找任务栏, 非简体中文系统可以设置为相应语言的名称
-- `-i=托盘输入指示器\s+(\w+)` 通过该正则表达式来获取当前输入法的状态, 其他输入法可以尝试修改该正则表达式来适配
+- `-i=输入指示\S*\s+(\S+)` 通过该正则表达式来获取当前输入法的状态, 其他输入法可以尝试修改该正则表达式来适配。\
+  默认正则同时匹配两种 Windows 版本的命名：`任务栏输入指示` 和 `托盘输入指示器`。使用 `\S+` 而非 `\w+` 来可靠匹配中文字符。
 - `-k=shift` 通过该参数来设置切换输入法的快捷键, 其他输入法或使用其他快捷键可以尝试修改该参数来适配,如 `-k=ctrl+space` \
   如果切换输入法需要用到难以输入的特殊按键，可以填写 [Virtual Keys 键代码] 的16进制表示, 如 `-k=ctrl+0x7C` 代表 `ctrl+F13`.
 
@@ -25,7 +26,7 @@ im-select-mspy 是一个针对微软拼音输入法的输入法切换工具, 它
 在无法从任务栏获取到按钮的情况下，程序会尝试从输入法工具栏获取到输入法状态，有如下的额外配置
 
 - `--toolbar="Windows 输入体验"` 通过该参数来寻找输入法工具栏, 非简体中文系统可以设置为相应语言的名称
-- `--toolbar-i="中/英文, (\\w+)"` 通过该正则表达式在工具栏中获取当前输入法的状态, 其他输入法可以尝试修改该正则表达式来适配
+- `--toolbar-i="中/英文, (\\S+)"` 通过该正则表达式在工具栏中获取当前输入法的状态, 其他输入法可以尝试修改该正则表达式来适配
 
 上述 `-t`, `-i`, `--toolbar`, `--toolbar-i` 可以通过 [Accessibility Insights](https://accessibilityinsights.io/docs/windows/overview/) 工具来获取.
 
@@ -55,8 +56,34 @@ $ im-select-mspy.exe
 # 切换为中文模式
 $ im-select-mspy.exe -k="ctrl+shift+space" "中文模式"
 # 英文操作系统
-$ im-select-mspy.exe -t="Taskbar" -i="Tray Input Indicator (.+)" --toolbar="Windows Input Experience" --toolbar-i="Chinese/English \(Shift\), (.+)" "Chinese mode"
+$ im-select-mspy.exe -t="Taskbar" -i="输入指示\\S*\\s+(\\S+)" --toolbar="Windows Input Experience" --toolbar-i="Chinese/English, (\\S+)" "Chinese mode"
 ```
+
+## 编码与输出
+
+程序输出统一使用 UTF-8 编码。在控制台（Windows Terminal / PowerShell）中直接运行时，通过 `WriteConsoleW` 写入 Unicode，完全绕过代码页问题。当 stdout 被管道重定向时（如 VS Code 扩展读取），自动回退为 UTF-8 字节流输出。
+
+如果在旧版控制台中遇到乱码，可使用 `chcp 65001` 临时切换 UTF-8 代码页。
+
+## 常见问题
+
+### 输入法工具栏隐藏时程序找不到状态
+
+部分 Windows 版本的任务栏托盘按钮名为 `任务栏输入指示`，而非 `托盘输入指示器`。当前默认正则（`输入指示\S*\s+(\S+)`）已兼容两种命名。
+
+如仍有问题，先用 `-v` 查看实际按钮名：
+
+```shell
+im-select-mspy.exe -v
+```
+
+找到含 `输入指示` 的按钮，再据此调整 `-i` 正则。也可用 [Accessibility Insights](https://accessibilityinsights.io/docs/windows/overview/) 工具直接查看 UI 元素名称。
+
+### 控制台输出乱码
+
+- PowerShell / Windows Terminal：正常显示，程序自动使用 Unicode API 输出
+- cmd.exe：运行前执行 `chcp 65001` 切换到 UTF-8 代码页
+- Git Bash / MinGW：程序输出纯 UTF-8，直接运行即可
 
 # 编译
 

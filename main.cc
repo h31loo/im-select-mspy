@@ -13,8 +13,42 @@
 #include <cctype>
 #include <algorithm>
 #include <locale>
+#include <sstream>
 
 using namespace std;
+
+string w2utf8(const wstring& str)
+{
+  string buf;
+  buf.resize(str.size() * 4);
+  auto n = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), -1, buf.data(), (int)buf.length(), NULL, NULL);
+  if (n == 0) {
+    return "";
+  }
+  buf.resize(n-1);
+  return buf;
+}
+
+// Write wstring to stdout. Uses WriteConsoleW when attached to a console
+// (bypasses code page entirely), falls back to UTF-8 cout for pipes (VS Code).
+void print_utf8(const wstring& ws)
+{
+  HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (GetFileType(h) == FILE_TYPE_CHAR) {
+    DWORD written;
+    WriteConsoleW(h, ws.c_str(), (DWORD)ws.length(), &written, NULL);
+  } else {
+    cout << w2utf8(ws);
+  }
+}
+
+// RAII helper: collects wstring fragments, writes via print_utf8 on destruction.
+// Usage: u8out() << L"text" << variable << '\n';
+struct u8out_t {
+  wostringstream buf;
+  template<typename T> u8out_t& operator<<(const T& val) { buf << val; return *this; }
+  ~u8out_t() { print_utf8(buf.str()); }
+};
 
 
 typedef _com_ptr_t<_com_IIID<IUIAutomation, &__uuidof(IUIAutomation)>> IUIAutomationPtr;
@@ -140,11 +174,15 @@ ImeButton get_ime_button(const CliOptions & options) {
 
   pAutomation->CreatePropertyCondition(UIA_NamePropertyId, _variant_t(options.taskbar_name.c_str()), &pCondition);
 
-  hr = pDesktop->FindFirst(TreeScope_Children, pCondition, &pTaskBar);
+  hr = pDesktop->FindFirst(TreeScope_Descendants, pCondition, &pTaskBar);
+  if (FAILED(hr) || !pTaskBar) {
+    if (options.verbose)  u8out_t() << L"taskbar not found: " << options.taskbar_name << '\n';
+    return { L"", nullptr };
+  }
 
   pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, _variant_t(UIA_ButtonControlTypeId), &pCondition);
 
-  if (options.verbose)  wcout << L"found taskbar: " << options.taskbar_name << endl;
+  if (options.verbose)  u8out_t() << L"found taskbar: " << options.taskbar_name << '\n';
   IUIAutomationElementArrayPtr arrButtons;
   pTaskBar->FindAll(TreeScope_Descendants, pCondition, &arrButtons);
 
@@ -156,13 +194,13 @@ ImeButton get_ime_button(const CliOptions & options) {
     arrButtons->GetElement(i, &pButton);
     auto name = get_element_name(pButton);
 
-    if (options.verbose)  wcout << L"Is '" << name << L"' ime button?  ";
+    if (options.verbose)  u8out_t() << L"Is '" << name << L"' ime button?  ";
     wsmatch match;
     if (regex_search(name, match, options.ime_capture)) {
-      if (options.verbose)  wcout << L"YES" << endl;
+      if (options.verbose)  u8out_t() << L"YES" << '\n';
       return { match[1], pButton };
     }
-    if (options.verbose)  wcout << L"NO" << endl;
+    if (options.verbose)  u8out_t() << L"NO" << '\n';
   }
   return { L"", nullptr };
 }
@@ -193,7 +231,7 @@ ImeButton get_ime_button_from_toolbar(const CliOptions &options) {
   {
     return { L"", nullptr };
   }
-  if (options.verbose) wcout << L"found toolbar: " << options.toolbar_name << endl;
+  if (options.verbose) u8out_t() << L"found toolbar: " << options.toolbar_name << '\n';
 
   pAutomation->CreatePropertyCondition(UIA_ControlTypePropertyId, _variant_t(UIA_ListItemControlTypeId), &pCondition);
   pInputPanel->FindAll(TreeScope_Descendants, pCondition, &arrButtons);
@@ -204,13 +242,13 @@ ImeButton get_ime_button_from_toolbar(const CliOptions &options) {
     IUIAutomationElementPtr pButton;
     arrButtons->GetElement(i, &pButton);
     auto name = get_element_name(pButton);
-    if (options.verbose) wcout << L"Is '" << name << L"' ime button?";
+    if (options.verbose) u8out_t() << L"Is '" << name << L"' ime button?";
     if (wsmatch match; regex_search(name, match, options.toolbar_ime_capture))
     {
-      if (options.verbose) wcout << L"YES" << endl;
+      if (options.verbose) u8out_t() << L"YES" << '\n';
       return {match[1], pButton};
     }
-    if (options.verbose) wcout << L"NO" << endl;
+    if (options.verbose) u8out_t() << L"NO" << '\n';
   }
   return {L"", nullptr};
 }
@@ -220,10 +258,10 @@ CliOptions chinese_options()
 {
   CliOptions options;
   options.taskbar_name = L"任务栏";
-  options.ime_capture_re = L"托盘输入指示器\\s+(\\w+)"; //\\s+(\\S+)\\s*.+";
+  options.ime_capture_re = L"输入指示\\S*\\s+(\\S+)";
   options.switch_keys = L"shift";
   options.toolbar_name = L"Windows 输入体验";
-  options.toolbar_ime_capture_re = L"中/英文, (\\w+)";
+  options.toolbar_ime_capture_re = L"中/英文, (\\S+)";
   options.verbose = false;
   return options;
 }
@@ -286,28 +324,17 @@ CliOptions parse_options(int argc, wchar_t * argv[])
 
 void print_options(const CliOptions & options)
 {
-  wcout << L"taskbar name(-t): " << options.taskbar_name << endl;
-  wcout << L"ime capture(-i): " << options.ime_capture_re << endl;
-  wcout << L"switch keys(-k): " << options.switch_keys << endl;
-  wcout << L"toolbar name(--toolbar): " << options.toolbar_name << endl;
-  wcout << L"toolbar ime capture(--toolbar-i): " << options.toolbar_ime_capture_re << endl;
-  wcout << L"mode: " << options.mode << endl;
-}
-
-string w2utf8(const wstring& str)
-{
-  string buf;
-  buf.resize(str.size() * 4);
-  auto n = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), -1, buf.data(), (int)buf.length(), NULL, NULL);
-  if (n == 0) {
-    return "";
-  }
-  buf.resize(n-1);
-  return buf;
+  u8out_t() << L"taskbar name(-t): " << options.taskbar_name << '\n';
+  u8out_t() << L"ime capture(-i): " << options.ime_capture_re << '\n';
+  u8out_t() << L"switch keys(-k): " << options.switch_keys << '\n';
+  u8out_t() << L"toolbar name(--toolbar): " << options.toolbar_name << '\n';
+  u8out_t() << L"toolbar ime capture(--toolbar-i): " << options.toolbar_ime_capture_re << '\n';
+  u8out_t() << L"mode: " << options.mode << '\n';
 }
 
 int wmain(int argc, wchar_t * argv[])
 {
+  SetConsoleOutputCP(CP_UTF8);
   std::ios::sync_with_stdio(false);
   std::locale::global( std::locale("") );
 
@@ -325,10 +352,15 @@ int wmain(int argc, wchar_t * argv[])
   }
   catch (_com_error&  e)
   {
-    wcout << L"get ime button failed: " << e.ErrorMessage() << endl;
-    wcout << L"maybe the taskbar name (-t) is not correct" << endl;
+    u8out_t() << L"get ime button failed: " << e.ErrorMessage() << '\n';
+    u8out_t() << L"maybe the taskbar name (-t) is not correct" << '\n';
     print_options(options);
     return 1;
+  }
+  catch (...)
+  {
+    if (options.verbose)  u8out_t() << L"unexpected error in get_ime_button, trying toolbar fallback" << '\n';
+    ime_button = { L"", nullptr };
   }
 
   if (!ime_button.pElement) {
@@ -338,7 +370,7 @@ int wmain(int argc, wchar_t * argv[])
 
   if (!ime_button.pElement)
   {
-    wcout << L"ime button not found, maybe the ime_capture (-i) can't match the ime button name  " << endl;
+    u8out_t() << L"ime button not found, maybe the ime_capture (-i) can't match the ime button name  " << '\n';
     print_options(options);
     return 1;
   }
@@ -347,7 +379,7 @@ int wmain(int argc, wchar_t * argv[])
   if (options.mode.empty())
   {
     // get current mode
-    cout << w2utf8(ime_button.current_mode) << endl;
+    print_utf8(ime_button.current_mode + L'\n');
   }
   else
   {
